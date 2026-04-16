@@ -1,14 +1,18 @@
 # advanced_weather_client.py
+from ast import Dict
 import asyncio
+from logging import config
 import aiohttp
 from functools import lru_cache
 from datetime import datetime, timedelta
 import json
 import os
 
+from config import Config
+
 class AsyncWeatherClient:
     def __init__(self):
-        self.api_key = Config.OPENWEATHER_API_KEY
+        self.api_key = config.OPENWEATHER_API_KEY
         self.base_url = Config.BASE_URL
         self.cache = {}
         self.cache_timeout = timedelta(minutes=10)
