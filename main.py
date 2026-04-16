@@ -1,101 +1,253 @@
 # main.py
+import asyncio
+from textual.app import App, ComposeResult
+from textual.widgets import Header, Footer, Input, Static, DataTable, LoadingIndicator
+from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
+from textual.binding import Binding
+from textual.reactive import reactive
+from datetime import datetime
+
 from weather_client import WeatherClient
 from config import Config
-import sys
 
-def display_current_weather(weather_data: dict):
-    """Display current weather information"""
-    print("\n" + "="*50)
-    print(f"Weather in {weather_data['city']}, {weather_data['country']}")
-    print("="*50)
-    print(f"Temperature: {weather_data['temperature']}°C")
-    print(f"Feels like: {weather_data['feels_like']}°C")
-    print(f"Condition: {weather_data['description'].title()}")
-    print(f"Humidity: {weather_data['humidity']}%")
-    print(f"Pressure: {weather_data['pressure']} hPa")
-    print(f"Wind Speed: {weather_data['wind_speed']} m/s")
-    print(f"Visibility: {weather_data['visibility']} meters")
-    print(f"Last updated: {weather_data['timestamp']}")
-    print("="*50)
+class CurrentWeatherCard(Static):
+    """A stylish card for current weather"""
+    
+    DEFAULT_CSS = """
+    CurrentWeatherCard {
+        width: 100%;
+        height: auto;
+        background: $surface;
+        border: solid $accent;
+        padding: 1 2;
+        margin-bottom: 1;
+    }
+    .temp-large {
+        text-style: bold;
+        color: $text;
+        dock: left;
+        width: 30%;
+        content-align: center middle;
+    }
+    .details {
+        width: 70%;
+        padding-left: 1;
+    }
+    .city-name {
+        text-style: bold italic;
+        color: $primary;
+    }
+    .condition {
+        color: $secondary;
+        text-style: bold;
+    }
+    .stat-row {
+        layout: horizontal;
+        height: 1;
+        margin-top: 1;
+    }
+    .stat-label {
+        width: 12;
+        color: $text-muted;
+    }
+    .stat-value {
+        text-style: bold;
+    }
+    .error-msg {
+        color: $error;
+        text-style: bold;
+        padding: 1;
+    }
+    """
 
-def display_forecast(forecast_data: list):
-    """Display weather forecast"""
-    print("\n" + "="*50)
-    print("5-Day Weather Forecast")
-    print("="*50)
-    
-    for forecast in forecast_data:
-        print(f"\n{forecast['datetime'].strftime('%Y-%m-%d %H:%M')}")
-        print(f"  Temperature: {forecast['temperature']}°C")
-        print(f"  Condition: {forecast['description'].title()}")
-        print(f"  Humidity: {forecast['humidity']}%")
-        print(f"  Wind: {forecast['wind_speed']} m/s")
+    def __init__(self):
+        super().__init__()
+        self.data = None
+        self.error = None
 
-def main():
-    # Validate configuration
-    try:
-        Config.validate()
-    except ValueError as e:
-        print(f"Configuration error: {e}")
-        sys.exit(1)
-    
-    # Initialize weather client
-    weather_client = WeatherClient()
-    
-    while True:
-        print("\nWeather App Menu:")
-        print("1. Get current weather by city")
-        print("2. Get current weather by coordinates")
-        print("3. Get 5-day forecast")
-        print("4. Search for cities")
-        print("5. Exit")
+    def update_data(self, data: dict):
+        self.data = data
+        self.error = None
+        self.refresh()
+
+    def update_error(self, message: str):
+        self.data = None
+        self.error = message
+        self.refresh()
+
+    def compose(self) -> ComposeResult:
+        if self.error:
+            yield Static(f"⚠️  {self.error}", classes="error-msg")
+            return
+        if not self.data:
+            yield Static("🔍 Search for a city to begin...", classes="placeholder")
+            return
+
+        w = self.data
+        # Main Temperature Display
+        yield Static(f"{w['temperature']}°C", classes="temp-large")
         
-        choice = input("\nEnter your choice (1-5): ").strip()
+        with Vertical(classes="details"):
+            yield Static(f"📍 {w['city']}, {w['country']}", classes="city-name")
+            yield Static(f"☁️ {w['description'].title()}", classes="condition")
+            
+            with Horizontal(classes="stat-row"):
+                yield Static("Feels Like:", classes="stat-label")
+                yield Static(f"{w['feels_like']}°C", classes="stat-value")
+            
+            with Horizontal(classes="stat-row"):
+                yield Static("Humidity:", classes="stat-label")
+                yield Static(f"{w['humidity']}%", classes="stat-value")
+                
+            with Horizontal(classes="stat-row"):
+                yield Static("Wind:", classes="stat-label")
+                yield Static(f"{w['wind_speed']} m/s", classes="stat-value")
+
+class ForecastTable(DataTable):
+    """A clean table for forecast data"""
+    
+    DEFAULT_CSS = """
+    ForecastTable {
+        height: 1fr;
+        border: solid $surface-lighten-1;
+    }
+    """
+
+    def update_data(self, forecasts: list):
+        self.clear()
+        if not forecasts:
+            return
+            
+        # Add columns
+        if not self.columns:
+            self.add_columns("Time", "Temp", "Condition", "Humidity", "Wind")
+
+        for f in forecasts:
+            time_str = f['datetime'].strftime("%a %H:%M")
+            temp_str = f"{f['temperature']}°"
+            desc_str = f['description'].title()
+            hum_str = f"{f['humidity']}%"
+            wind_str = f"{f['wind_speed']}m/s"
+            
+            self.add_row(time_str, temp_str, desc_str, hum_str, wind_str)
+
+class WeatherApp(App):
+    """A modern TUI Weather App"""
+    
+    CSS = """
+    Screen {
+        layout: grid;
+        grid-size: 2;
+        grid-columns: 1fr 2fr; /* Left panel smaller, right panel wider */
+        grid-gutter: 1;
+        padding: 1;
+        background: $background;
+    }
+    
+    #sidebar {
+        width: 100%;
+        height: 100%;
+    }
+    
+    #main-content {
+        width: 100%;
+        height: 100%;
+    }
+
+    Input {
+        dock: top;
+        margin-bottom: 1;
+        border: solid $primary;
+    }
+    
+    .header-title {
+        text-style: bold;
+        color: $primary;
+        margin-bottom: 1;
+    }
+
+    LoadingIndicator {
+        width: 100%;
+        height: 100%;
+        display: none; /* Hidden by default */
+    }
+    
+    LoadingIndicator.loading {
+        display: block;
+    }
+    """
+
+    BINDINGS = [
+        Binding("q", "quit", "Quit"),
+        Binding("ctrl+r", "refresh", "Refresh"),
+    ]
+
+    loading = reactive(False)
+
+    def __init__(self):
+        super().__init__()
+        try:
+            Config.validate()
+            self.client = WeatherClient()
+        except ValueError as e:
+            self.exit(message=f"Config Error: {e}")
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        
+        with Horizontal():
+            # Left Sidebar: Search & Current Weather
+            with Vertical(id="sidebar"):
+                yield Input(placeholder="🔍 City Name...", id="search-input")
+                yield CurrentWeatherCard()
+            
+            # Right Panel: Forecast
+            with Vertical(id="main-content"):
+                yield Static("📅 5-Day Forecast", classes="header-title")
+                yield ForecastTable()
+                yield LoadingIndicator(id="loader")
+
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one(Input).focus()
+
+    async def watch_loading(self, loading: bool) -> None:
+        """Show/hide loader based on reactive state"""
+        loader = self.query_one("#loader", LoadingIndicator)
+        if loading:
+            loader.add_class("loading")
+        else:
+            loader.remove_class("loading")
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        city = event.value
+        if not city:
+            return
+        
+        self.loading = True
         
         try:
-            if choice == '1':
-                city = input("Enter city name: ").strip()
-                country = input("Enter country code (optional, e.g., US): ").strip()
-                
-                weather_data = weather_client.get_current_weather(
-                    city, 
-                    country if country else None
-                )
-                display_current_weather(weather_data)
-                
-            elif choice == '2':
-                lat = float(input("Enter latitude: "))
-                lon = float(input("Enter longitude: "))
-                
-                weather_data = weather_client.get_weather_by_coordinates(lat, lon)
-                display_current_weather(weather_data)
-                
-            elif choice == '3':
-                city = input("Enter city name: ").strip()
-                forecast_data = weather_client.get_forecast(city)
-                display_forecast(forecast_data)
-                
-            elif choice == '4':
-                query = input("Enter city name to search: ").strip()
-                cities = weather_client.search_cities(query)
-                
-                if cities:
-                    print("\nFound cities:")
-                    for i, city in enumerate(cities, 1):
-                        state_info = f", {city['state']}" if city.get('state') else ""
-                        print(f"{i}. {city['name']}{state_info}, {city['country']}")
-                else:
-                    print("No cities found.")
-                    
-            elif choice == '5':
-                print("Goodbye!")
-                break
-                
-            else:
-                print("Invalid choice. Please enter 1-5.")
-                
+            # Run blocking IO in thread to keep UI responsive
+            current = await asyncio.to_thread(self.client.get_current_weather, city)
+            forecast = await asyncio.to_thread(self.client.get_forecast, city)
+            
+            # Update UI components
+            self.query_one(CurrentWeatherCard).update_data(current)
+            self.query_one(ForecastTable).update_data(forecast)
+            
         except Exception as e:
-            print(f"Error: {e}")
+            self.notify(f"Error: {str(e)}", severity="error", timeout=10)
+            self.query_one(CurrentWeatherCard).update_error(str(e))
+        finally:
+            self.loading = False
+
+    def action_refresh(self) -> None:
+        input_widget = self.query_one(Input)
+        if input_widget.value:
+            # Simulate enter press
+            self.post_message(Input.Submitted(input_widget, input_widget.value))
 
 if __name__ == "__main__":
-    main()
+    app = WeatherApp()
+    app.run()
